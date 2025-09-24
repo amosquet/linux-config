@@ -21,12 +21,18 @@ rm -rf paru
 
 # configure pacman and paru
 git clone https://github.amcloud/linux-config.git
-cd linux-config
+cd linux-config/arch
 mv pacman.conf /etc/pacman.conf
 mv paru.conf /etc/paru.conf
+cd ../..
+rm -rf linux-config
+# end configure pacman and paru
 
 # install packages from official repos
 pacman -S --noconfirm --needed \
+    sudo \
+    nano \
+    man \
     git \
     htop \
     fastfetch \
@@ -39,7 +45,6 @@ pacman -S --noconfirm --needed \
     vlc \
     vlc-plugins-all \
     gimp \
-    kdenlive \
     obs-studio \
     bitwarden \
     obsidian \
@@ -57,6 +62,11 @@ pacman -S --noconfirm --needed \
     7zip \
     freecad \
     wget \
+    dolphin \
+    okular \
+    kdenlive \
+
+    
 
 
 # install AUR apps
