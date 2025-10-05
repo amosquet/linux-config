@@ -21,8 +21,11 @@ pacman -S --noconfirm --needed \
     base-devel \
 
 # install paru
-echo "-> Installing paru AUR helper..."
-git clone https://aur.archlinux.org/paru.git
+echo "-> Installing paru AUR helper from GitHub..."
+# Get the latest release from GitHub
+PARU_LATEST=$(curl -s https://api.github.com/repos/Morganamilo/paru/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+echo "-> Downloading paru ${PARU_LATEST}..."
+git clone --branch "${PARU_LATEST}" https://github.com/Morganamilo/paru.git
 cd paru
 makepkg -si --noconfirm
 cd ..
