@@ -1,7 +1,38 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status
-set -e
+# Create failed packages log file
+FAILED_LOG="/tmp/arch-installer-failures.log"
+echo "Arch Linux Installation Failures - $(date)" > "$FAILED_LOG"
+echo "=================================================" >> "$FAILED_LOG"
+
+# Function to install packages with error handling
+install_packages() {
+    local description="$1"
+    shift
+    local packages=("$@")
+    
+    echo "-> Installing $description..."
+    
+    for package in "${packages[@]}"; do
+        if ! pacman -S --noconfirm --needed "$package" 2>/dev/null; then
+            echo "   WARNING: Failed to install $package - continuing..."
+            echo "Failed to install: $package ($description)" >> "$FAILED_LOG"
+        fi
+    done
+}
+
+# Function to enable services with error handling
+enable_service() {
+    local service="$1"
+    echo "   Enabling $service..."
+    if ! systemctl enable "$service" 2>/dev/null; then
+        echo "   WARNING: Failed to enable $service - continuing..."
+        echo "Failed to enable service: $service" >> "$FAILED_LOG"
+    fi
+}
+
+# Exit immediately if a command exits with a non-zero status (disabled for error handling)
+# set -e
 
 if ! sudo true; then
     echo "This script must be run with sudo."
@@ -11,14 +42,31 @@ fi
 echo "Starting Arch Linux desktop environment installation..."
 echo "=================================================="
 
+# Ask user about optional hardware
+echo "Hardware Configuration:"
+echo "======================"
+echo "Note: NetworkManager will be installed (required for desktop environment)"
+
+read -p "Do you need Bluetooth support? (y/n): " -n 1 -r BLUETOOTH_SUPPORT
+echo
+
+if [[ $BLUETOOTH_SUPPORT =~ ^[Yy]$ ]]; then
+    echo "- Bluetooth: YES"
+else
+    echo "- Bluetooth: NO"
+fi
+
+echo "=================================================="
+
 # update system
 echo "-> Updating system packages..."
-pacman -Syu --noconfirm
+if ! pacman -Syu --noconfirm; then
+    echo "WARNING: System update failed - continuing with installation..."
+    echo "System update failed" >> "$FAILED_LOG"
+fi
 
 echo "-> Installing git and base development tools..."
-pacman -S --noconfirm --needed \
-    git \
-    base-devel \
+install_packages "git and base development tools" git base-devel
 
 # install paru
 echo "-> Installing paru AUR helper from GitHub..."
@@ -43,51 +91,88 @@ rm -rf linux-config
 # end configure pacman and paru
 
 # Install desktop environment (KDE Plasma)
-echo "-> Installing KDE Plasma desktop environment..."
-pacman -S --noconfirm --needed \
-    plasma-meta \
-    kde-applications-meta \
-    sddm \
-    sddm-kcm \
+install_packages "KDE Plasma desktop environment" plasma-meta kde-applications-meta sddm sddm-kcm
 
 echo "-> Enabling SDDM display manager..."
-systemctl enable sddm.service
+enable_service "sddm.service"
 
 # Install audio system (PipeWire)
-echo "-> Installing PipeWire audio system..."
-pacman -S --noconfirm --needed \
-    pipewire \
-    pipewire-alsa \
-    pipewire-pulse \
-    pipewire-jack \
-    wireplumber \
+install_packages "PipeWire audio system" pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber
 
 # Install network and Bluetooth support
-echo "-> Installing NetworkManager and Bluetooth support..."
-pacman -S --noconfirm --needed \
-    networkmanager \
-    network-manager-applet \
-    bluez \
-    bluez-utils \
-    bluedevil \
+echo "-> Installing NetworkManager and optional Bluetooth support..."
 
-echo "-> Enabling NetworkManager and Bluetooth services..."
-systemctl enable NetworkManager.service
-systemctl enable bluetooth.service
+# Always install NetworkManager (essential for desktop environment)
+echo "   Installing NetworkManager for network management..."
+NETWORK_PACKAGES="networkmanager network-manager-applet"
+SERVICES_TO_ENABLE="NetworkManager.service"
+
+# Add Bluetooth packages if requested
+if [[ $BLUETOOTH_SUPPORT =~ ^[Yy]$ ]]; then
+    echo "   Adding Bluetooth support..."
+    NETWORK_PACKAGES="$NETWORK_PACKAGES bluez bluez-utils bluedevil"
+    SERVICES_TO_ENABLE="$SERVICES_TO_ENABLE bluetooth.service"
+else
+    echo "   Skipping Bluetooth support..."
+fi
+
+# Install packages
+install_packages "NetworkManager and optional Bluetooth" $NETWORK_PACKAGES
+
+# Enable services
+echo "-> Enabling network services..."
+for service in $SERVICES_TO_ENABLE; do
+    enable_service "$service"
+done
 
 # Install fonts and graphics drivers
-echo "-> Installing essential fonts and graphics drivers..."
-pacman -S --noconfirm --needed \
-    ttf-dejavu \
-    ttf-liberation \
-    noto-fonts \
-    noto-fonts-emoji \
-    ttf-roboto \
-    mesa \
+install_packages "essential fonts" ttf-dejavu ttf-liberation noto-fonts noto-fonts-emoji ttf-roboto
+
+# Detect and install appropriate graphics drivers
+echo "-> Detecting graphics hardware and installing drivers..."
+# Always install mesa as a base
+install_packages "Mesa graphics drivers" mesa
+
+# Detect specific GPU vendors and install appropriate drivers
+if lspci | grep -i "vga\|3d\|display" | grep -i nvidia > /dev/null; then
+    echo "-> NVIDIA GPU detected - determining appropriate driver..."
+    
+    # Get NVIDIA GPU info
+    NVIDIA_GPU=$(lspci | grep -i "vga\|3d\|display" | grep -i nvidia)
+    echo "   Found: $NVIDIA_GPU"
+    
+    # Determine driver based on GPU generation
+    if echo "$NVIDIA_GPU" | grep -iE "RTX 40[0-9][0-9]|RTX A[0-9][0-9][0-9][0-9]|Ada Lovelace" > /dev/null; then
+        echo "-> Ada Lovelace GPU detected - installing nvidia (proprietary) driver..."
+        NVIDIA_DRIVER="nvidia"
+    elif echo "$NVIDIA_GPU" | grep -iE "RTX [23][0-9][0-9][0-9]|GTX 16[0-9][0-9]|Turing" > /dev/null; then
+        echo "-> Turing GPU detected - installing nvidia-open driver..."
+        NVIDIA_DRIVER="nvidia-open"
+    elif echo "$NVIDIA_GPU" | grep -iE "GTX [79][0-9][0-9]|GTX 10[0-9][0-9]|Maxwell" > /dev/null; then
+        echo "-> Maxwell GPU detected - installing nvidia (proprietary) driver..."
+        NVIDIA_DRIVER="nvidia"
+    else
+        echo "-> Unknown NVIDIA GPU generation - defaulting to nvidia (proprietary) driver..."
+        NVIDIA_DRIVER="nvidia"
+    fi
+    
+    install_packages "NVIDIA drivers ($NVIDIA_DRIVER)" $NVIDIA_DRIVER nvidia-utils lib32-nvidia-utils
+    echo "   Note: You may need to reboot for NVIDIA drivers to take effect"
+elif lspci | grep -i "vga\|3d\|display" | grep -i amd > /dev/null; then
+    echo "-> AMD GPU detected - installing optimized drivers..."
+    install_packages "AMD drivers" xf86-video-amdgpu vulkan-radeon lib32-vulkan-radeon mesa-vdpau lib32-mesa-vdpau
+elif lspci | grep -i "vga\|3d\|display" | grep -i intel > /dev/null; then
+    echo "-> Intel GPU detected - installing optimized drivers..."
+    install_packages "Intel drivers" xf86-video-intel vulkan-intel lib32-vulkan-intel intel-media-driver libva-intel-driver
+else
+    echo "-> Unknown or generic GPU detected - using Mesa drivers"
+fi
+
+# Install additional graphics utilities
+install_packages "graphics utilities" vulkan-tools lib32-mesa
 
 # install packages from official repos
-echo "-> Installing essential applications and utilities..."
-pacman -S --noconfirm --needed \
+install_packages "essential applications and utilities" \
     linux-headers \
     dkms \
     curl \
@@ -127,11 +212,7 @@ pacman -S --noconfirm --needed \
     wget \
     dolphin \
     okular \
-    kdenlive \
-
-    
-
-
+    kdenlive
 # install AUR apps
 echo "-> Installing AUR packages..."
 paru -S --noconfirm --needed \
@@ -236,8 +317,19 @@ fi
 
 # Enable essential system services
 echo "-> Enabling essential system services..."
-systemctl enable fstrim.timer      # SSD maintenance
-systemctl enable systemd-timesyncd.service  # Time synchronization
+enable_service "fstrim.timer"      # SSD maintenance
+enable_service "systemd-timesyncd.service"  # Time synchronization
+
+# Show summary of failed installations (if any)
+if [ -s "$FAILED_LOG" ]; then
+    echo ""
+    echo "⚠️  WARNING: Some packages/services failed to install/enable"
+    echo "Check the failure log: $FAILED_LOG"
+    echo ""
+    cat "$FAILED_LOG"
+    echo ""
+    echo "You can try installing failed packages manually after reboot."
+fi
 
 echo ""
 echo "=================================================="
