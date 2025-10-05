@@ -96,6 +96,33 @@ install_packages "KDE Plasma desktop environment" plasma-meta kde-applications-m
 echo "-> Enabling SDDM display manager..."
 enable_service "sddm.service"
 
+# Configure SDDM to use KDE Breeze theme
+echo "-> Configuring SDDM to use KDE Breeze theme..."
+mkdir -p /etc/sddm.conf.d
+cat > /etc/sddm.conf.d/kde_settings.conf << 'EOF'
+[Theme]
+Current=breeze
+
+[General]
+HaltCommand=/usr/bin/systemctl poweroff
+RebootCommand=/usr/bin/systemctl reboot
+HibernateCommand=/usr/bin/systemctl hibernate
+
+[X11]
+ServerArguments=-nolisten tcp
+EOF
+
+# Configure hibernation support
+echo "-> Configuring hibernation support..."
+echo "   Note: Hibernation requires a swap partition/file equal to or larger than your RAM"
+echo "   You may need to configure swap manually after installation for hibernation to work"
+
+# Enable hibernation in systemd
+if ! grep -q "hibernate" /etc/systemd/sleep.conf 2>/dev/null; then
+    echo "HibernateMode=platform shutdown" >> /etc/systemd/sleep.conf
+    echo "HybridSleepMode=suspend platform shutdown" >> /etc/systemd/sleep.conf
+fi
+
 # Install audio system (PipeWire)
 install_packages "PipeWire audio system" pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber
 
